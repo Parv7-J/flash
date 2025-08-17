@@ -1,6 +1,6 @@
 use crate::utils::{LexerError, LexerState, Token};
 
-pub fn lexer(input: String) -> Result<Vec<Token>, LexerError> {
+pub fn tokenization(input: String) -> Result<Vec<Token>, LexerError> {
     let input = input.trim();
     let mut lexer_state = LexerState::Idle;
     let mut current = String::new();

@@ -4,28 +4,42 @@ use std::{
     process,
 };
 
-use flash::{executor::execute, lexer::lexer, parser::parse, utils::ExecutionContext};
+use flash::{executor, lexer, parser, utils};
 
-fn main() -> io::Result<()> {
+fn main() -> Result<(), ()> {
+    unsafe {
+        if libc::isatty(libc::STDIN_FILENO) == 1 {
+            //handle error
+            libc::setpgid(0, 0);
+            libc::tcsetpgrp(libc::STDIN_FILENO, process::id() as i32);
+        };
+    };
+    let shell_pgid = unsafe { libc::getpgid(0) };
+    if shell_pgid == -1 {
+        return Err(());
+    }
+
+    let mut execution_context = utils::ExecutionContext {
+        variables: HashMap::new(),
+        built_ins: utils::built_ins(),
+        shell_pgid: shell_pgid as u32,
+        last_exit_status: 0,
+    };
+
+    utils::ignore_signals();
+
     let mut input = String::new();
 
     loop {
         input.clear();
         print!("$ ");
         io::stdout().flush().unwrap();
-        stdin().read_line(&mut input)?;
-        let tokens = lexer(input.clone()).unwrap();
-        // println!("{tokens:?}");
-        let command = parse(tokens).unwrap();
-        // println!("{command:?}");
-        let pid = process::id();
-        let pgid = unsafe { libc::getpgid(pid as i32) } as u32;
-        let mut execution_context = ExecutionContext {
-            variables: HashMap::new(),
-            shell_pgid: pgid,
-            last_exit_status: 0,
-        };
-        match execute(&command, &mut execution_context) {
+        stdin().read_line(&mut input).map_err(|_| ())?;
+        let tokens = lexer::tokenization(input.clone()).unwrap();
+        println!("{tokens:?}");
+        let command = parser::parse(tokens).unwrap();
+        println!("{command:?}");
+        match executor::execute(&command, &mut execution_context) {
             Ok(code) => {
                 execution_context.last_exit_status = code;
             }

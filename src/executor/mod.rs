@@ -1,22 +1,38 @@
 use std::{ffi::CString, fs::File, os::fd::AsRawFd};
 
-use crate::utils::{BUILT_INS, Command, ExecutionContext, ExecutionError, RedirectionType};
+use crate::utils::{Command, ExecutionContext, ExecutionError, RedirectionType};
 
 pub fn execute(node: &Command, context: &mut ExecutionContext) -> Result<i32, ExecutionError> {
     match node {
         Command::Simple(sc) => {
-            if BUILT_INS.contains(&sc.command.as_str()) {
-                return Ok(0);
+            if let Some(closure) = context.built_ins.get(sc.command.as_str()) {
+                return closure(sc.clone());
             }
             unsafe {
                 let pid = libc::fork();
                 if pid == -1 {
                     return Err(ExecutionError::ForkFailed);
                 } else if pid == 0 {
-                    libc::signal(libc::SIGINT, libc::SIG_DFL);
-                    libc::signal(libc::SIGTSTP, libc::SIG_DFL);
+                    let mut action: libc::sigaction = std::mem::zeroed();
 
-                    libc::setpgid(0, 0);
+                    action.sa_sigaction = libc::SIG_DFL;
+
+                    let signals_to_reset = [
+                        libc::SIGINT,
+                        libc::SIGQUIT,
+                        libc::SIGTSTP,
+                        libc::SIGTTIN,
+                        libc::SIGTTOU,
+                    ];
+
+                    for &signal in &signals_to_reset {
+                        if libc::sigaction(signal, &action, std::ptr::null_mut()) == -1 {
+                            panic!(
+                                "Failed to reset signal handler in child for signal {}",
+                                signal
+                            );
+                        }
+                    }
 
                     let c_args = sc
                         .arguments
@@ -35,12 +51,12 @@ pub fn execute(node: &Command, context: &mut ExecutionContext) -> Result<i32, Ex
 
                     libc::exit(1);
                 } else {
-                    libc::tcsetpgrp(libc::STDIN_FILENO, pid);
+                    // libc::tcsetpgrp(libc::STDIN_FILENO, pid);
 
                     let mut status = 0;
                     libc::waitpid(pid, &mut status, 0);
 
-                    libc::tcsetpgrp(libc::STDIN_FILENO, context.shell_pgid as i32);
+                    // libc::tcsetpgrp(libc::STDIN_FILENO, context.shell_pgid as i32);
                     return Ok(status);
                 }
             }
