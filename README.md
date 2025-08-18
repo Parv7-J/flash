@@ -1,0 +1,3 @@
+# Flash, a blazing fast shell from scratch
+
+Flash is a lightweight and performant, POSIX-compliant shell written from scratch in Rust, leveraging the language's safety and speed for a modern command-line environment. 🦀 It provides a powerful and flexible user experience by offering full control over process input and output, the ability to chain commands into complex data-processing pipelines, and logical operators for conditional execution. The shell features a complete job control system for running tasks concurrently in the background, complemented by essential built-in commands for filesystem navigation and process management.
