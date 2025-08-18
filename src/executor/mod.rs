@@ -1,12 +1,23 @@
-use std::{ffi::CString, fs::File, os::fd::AsRawFd};
+use std::{collections::HashMap, ffi::CString, fs::File, os::fd::AsRawFd};
 
-use crate::utils::{Command, ExecutionContext, ExecutionError, RedirectionType};
+use libc::{STDIN_FILENO, STDOUT_FILENO};
 
-pub fn execute(node: &Command, context: &mut ExecutionContext) -> Result<i32, ExecutionError> {
+use crate::utils::{
+    Command, ConditionalType, ExecutionContext, ExecutionError, RedirectionType, SimpleCommand,
+};
+
+pub fn execute(
+    node: &Command,
+    context: &mut ExecutionContext,
+    built_ins: &HashMap<
+        String,
+        Box<dyn Fn(SimpleCommand, &mut ExecutionContext) -> Result<i32, ExecutionError>>,
+    >,
+) -> Result<i32, ExecutionError> {
     match node {
         Command::Simple(sc) => {
-            if let Some(closure) = context.built_ins.get(sc.command.as_str()) {
-                return closure(sc.clone());
+            if let Some(closure) = built_ins.get(sc.command.as_str()) {
+                return closure(sc.clone(), context);
             }
             unsafe {
                 let pid = libc::fork();
@@ -61,9 +72,51 @@ pub fn execute(node: &Command, context: &mut ExecutionContext) -> Result<i32, Ex
                 }
             }
         }
+        Command::Pipe { left, right } => unsafe {
+            let mut pipe_fd = [0; 2];
+            libc::pipe(pipe_fd.as_mut_ptr());
+
+            let pid_left = libc::fork();
+
+            if pid_left == -1 {
+                return Err(ExecutionError::ForkFailed);
+            } else if pid_left == 0 {
+                libc::close(pipe_fd[0]);
+                libc::dup2(pipe_fd[1], STDOUT_FILENO);
+                libc::close(pipe_fd[1]);
+
+                let exit_code = execute(left, context, built_ins).unwrap_or(1);
+
+                libc::exit(exit_code);
+            }
+
+            let pid_right = libc::fork();
+
+            if pid_right == -1 {
+                return Err(ExecutionError::ForkFailed);
+            } else if pid_right == 0 {
+                libc::close(pipe_fd[1]);
+                libc::dup2(pipe_fd[0], STDIN_FILENO);
+                libc::close(pipe_fd[0]);
+
+                let exit_code = execute(right, context, built_ins).unwrap_or(1);
+
+                libc::exit(exit_code);
+            }
+
+            libc::close(pipe_fd[0]);
+            libc::close(pipe_fd[1]);
+
+            let mut status = 0;
+            libc::waitpid(pid_left, &mut status, 0);
+            libc::waitpid(pid_right, &mut status, 0);
+
+            return Ok(status);
+        },
+
         Command::Sequence { first, second } => {
-            execute(first, context)?;
-            execute(second, context)
+            execute(first, context, built_ins)?;
+            execute(second, context, built_ins)
         }
         Command::Redirect {
             child_command,
@@ -111,7 +164,7 @@ pub fn execute(node: &Command, context: &mut ExecutionContext) -> Result<i32, Ex
                 libc::close(file_fd);
             }
 
-            let status = execute(child_command, context)?;
+            let status = execute(child_command, context, built_ins)?;
 
             unsafe {
                 libc::dup2(saved_fd, std_fd);
@@ -120,6 +173,51 @@ pub fn execute(node: &Command, context: &mut ExecutionContext) -> Result<i32, Ex
 
             return Ok(status);
         }
-        _ => return Err(ExecutionError::Panic),
+        Command::Conditional {
+            left,
+            right,
+            operator,
+        } => {
+            let exit_code = execute(left, context, built_ins).unwrap_or(1);
+            if exit_code == 0 {
+                match operator {
+                    ConditionalType::And => {
+                        return execute(right, context, built_ins);
+                    }
+                    ConditionalType::Or => {
+                        return Ok(exit_code);
+                    }
+                }
+            } else {
+                match operator {
+                    ConditionalType::And => {
+                        return Ok(exit_code);
+                    }
+                    ConditionalType::Or => {
+                        return execute(right, context, built_ins);
+                    }
+                }
+            }
+        }
+        Command::Background { child_command } => unsafe {
+            let pid = libc::fork();
+            if pid == -1 {
+                return Err(ExecutionError::ForkFailed);
+            } else if pid == 0 {
+                let null_fd = File::open("/dev/null")
+                    .map_err(|e| ExecutionError::FileError(e))?
+                    .as_raw_fd();
+                libc::dup2(null_fd, libc::STDIN_FILENO);
+                libc::close(null_fd);
+
+                let exit_code = execute(child_command, context, built_ins).unwrap_or(1);
+
+                libc::exit(exit_code);
+            } else {
+                context.jobs.push(pid);
+                println!("[{}] {pid}", context.jobs.len());
+                return Ok(0);
+            }
+        },
     }
 }

@@ -176,9 +176,9 @@ pub fn tokenization(input: String) -> Result<Vec<Token>, LexerError> {
         LexerState::ReadingLiteral => {
             return Err(LexerError::UnterminatedStringLiteral);
         }
-        LexerState::ReadingOtherTokens => {
-            return Err(LexerError::IncompleteSpecialToken);
-        }
+        // LexerState::ReadingOtherTokens => {
+        //     return Err(LexerError::IncompleteSpecialToken);
+        // }
         _ => {}
     }
 

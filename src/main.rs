@@ -19,9 +19,18 @@ fn main() -> Result<(), ()> {
         return Err(());
     }
 
+    let built_ins: HashMap<
+        String,
+        Box<
+            dyn Fn(
+                utils::SimpleCommand,
+                &mut utils::ExecutionContext,
+            ) -> Result<i32, utils::ExecutionError>,
+        >,
+    > = utils::built_ins();
     let mut execution_context = utils::ExecutionContext {
         variables: HashMap::new(),
-        built_ins: utils::built_ins(),
+        jobs: vec![],
         shell_pgid: shell_pgid as u32,
         last_exit_status: 0,
     };
@@ -31,6 +40,25 @@ fn main() -> Result<(), ()> {
     let mut input = String::new();
 
     loop {
+        let mut status = 0;
+        for (idx, pid) in execution_context.jobs.iter_mut().enumerate() {
+            if *pid == 0 || *pid == -1 {
+                continue;
+            }
+            unsafe {
+                match libc::waitpid(*pid, &mut status, libc::WNOHANG) {
+                    0 => {}
+                    -1 => {
+                        *pid = -1;
+                    }
+                    _ => {
+                        println!("[{}] Done {status}", idx + 1);
+                        *pid = 0;
+                    }
+                };
+            }
+        }
+
         input.clear();
         print!("$ ");
         io::stdout().flush().unwrap();
@@ -39,7 +67,7 @@ fn main() -> Result<(), ()> {
         println!("{tokens:?}");
         let command = parser::parse(tokens).unwrap();
         println!("{command:?}");
-        match executor::execute(&command, &mut execution_context) {
+        match executor::execute(&command, &mut execution_context, &built_ins) {
             Ok(code) => {
                 execution_context.last_exit_status = code;
             }
